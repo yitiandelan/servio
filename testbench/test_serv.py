@@ -52,7 +52,7 @@ def build_target(files, target="verilog", cc="riscv64-elf-gcc", objcopy="riscv64
 @testbench(timeout_time=2,
            timeout_unit="us",
            skip=("serv_rf_top" != os.getenv("TOPLEVEL")))
-async def serv_exec_blinky(dut):
+async def serv_exec_blink(dut):
     fork(clock.Clock(dut.clk, 10, "ns").start())
     fork(set_reset(dut.clk, dut.i_rst, delay=3))
 
