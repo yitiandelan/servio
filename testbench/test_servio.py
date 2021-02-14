@@ -9,43 +9,50 @@ import re
 from random import randint
 from cocotb import test as testbench
 from cocotb import triggers, clock, fork
-from cocotb.drivers.avalon import AvalonMemory
+from cocotb.drivers.avalon import AvalonMemory, AvalonMaster
 from cocotb_test import simulator
 from test_serv import set_reset, set_regs
 
 
-@testbench(timeout_time=50,
+@testbench(timeout_time=60,
            timeout_unit="us",
            skip=("servio_rom" != os.getenv("TOPLEVEL")))
 async def servio_rom_function(dut):
     fork(clock.Clock(dut.clk, 10, "ns").start())
     fork(set_reset(dut.clk, dut.reset, delay=2))
 
-    mem = [randint(0, 256) for _ in range(1024)]
+    p0, p1 = (2**dut.DATA_WIDTH.value) - 1, dut.DATA_DEPTH.value
+    mem = [randint(0, p0) for _ in range(p1)]
     mem = {k: v for k, v in enumerate(mem)}
 
-    fork(set_regs(dut.clk, dut, ["wb_s1_{}".format(n)
-                                 for n in ["adr", "cyc", "we", "dat"]]))
-    fork(set_regs(dut.clk, dut, ["wb_s0_{}".format(n)
-                                 for n in ["adr", "cyc"]]))
+    rp = AvalonMaster(dut, "avs_s0", dut.clk)
+    wp = AvalonMaster(dut, "avs_s1", dut.clk)
 
     await triggers.FallingEdge(dut.reset)
     await triggers.RisingEdge(dut.clk)
 
-    await set_regs(dut.clk, dut, ["wb_s1_{}".format(n) for n in ["cyc", "we"]], 1)
     for k, v in mem.items():
-        dut.wb_s1_adr.value = k
-        dut.wb_s1_dat.value = v
+        await wp.write(k, v)
+
+    for k, v in mem.items():
+        d = await rp.read(k)
+        assert d == v
+
+    async def rp_foreach_read(stop: int):
         await triggers.RisingEdge(dut.clk)
-    await set_regs(dut.clk, dut, ["wb_s1_{}".format(n) for n in ["cyc", "we"]], 0)
+        rp.bus.read.value = 1
+        for n in range(stop):
+            rp.bus.address.value = n
+            await triggers.ClockCycles(dut.clk, 1)
+        rp.bus.read.value = 0
 
-    await triggers.RisingEdge(dut.clk)
+    fork(rp_foreach_read(len(mem)))
+    await triggers.RisingEdge(rp.bus.readdatavalid)
 
     for k, v in mem.items():
-        dut.wb_s0_cyc.value = 1
-        dut.wb_s0_adr.value = k
-        await triggers.RisingEdge(dut.clk if dut.wb_s0_ack.value else dut.wb_s0_ack)
-        dut.wb_s0_cyc.value = 0
+        await triggers.ClockCycles(dut.clk, 1)
+        d = rp.bus.readdata
+        assert d == v
 
     await triggers.ClockCycles(dut.clk, 2)
 
@@ -55,7 +62,7 @@ async def servio_rom_function(dut):
            skip=("servio_mux" != os.getenv("TOPLEVEL")))
 async def servio_mux_function(dut):
     fork(clock.Clock(dut.clk, 10, "ns").start())
-    fork(set_reset(dut.clk, dut.reset, delay=3))
+    fork(set_reset(dut.clk, dut.reset, delay=2))
 
     fork(set_regs(dut.clk, dut, ["wb_s{}_adr".format(n)
                                  for n in range(4)]))
@@ -118,7 +125,7 @@ def test_servio_mux_testcase():
 
     files += ["{}/rtl/{}".format(root_dir, n)
               for n in ["servio_mux.v"]]
-    defines += ["SERVIO_MUX_SIM"]
+    # defines += ["SERVIO_MUX_SIM"]
     assert not False in [os.path.isdir(n) for n in includes]
     assert not False in [os.path.isfile(n) for n in files]
 
