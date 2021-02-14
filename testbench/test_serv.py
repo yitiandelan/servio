@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+# Copyright (c) 2021 TIANLAN.tech
+# SPDX-License-Identifier: Apache-2.0
+
+# Language: Python
+
 import os
 import re
 from cocotb import test as testbench
