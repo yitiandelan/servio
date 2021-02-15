@@ -11,7 +11,53 @@ from cocotb import test as testbench
 from cocotb import triggers, clock, fork
 from cocotb.drivers.avalon import AvalonMemory, AvalonMaster
 from cocotb_test import simulator
-from test_serv import set_reset, set_regs
+from tempfile import TemporaryDirectory
+from test_serv import set_reset, set_regs, build_target
+
+
+@testbench(timeout_time=10,
+           timeout_unit="us",
+           skip=("servio" != os.getenv("TOPLEVEL")))
+async def servio_base_function(dut):
+    fork(clock.Clock(dut.clk, 10, "ns").start())
+    fork(set_reset(dut.clk, dut.reset, delay=3))
+
+    files = {}
+    files["blink.s"] = '''
+        .globl _start
+        _start:
+            addi x0, x0, 0
+            addi x0, x0, 0
+            addi x0, x0, 0
+            jal x0, _start
+        '''
+    files["link.ld"] = '''
+        OUTPUT_ARCH( "riscv" )
+        ENTRY(_start)
+        SECTIONS
+        {
+            . = 0x00000000;
+            .text : { *(.text) }
+            .data : { *(.data) }
+            .bss : { *(.bss) }
+        }
+        '''
+
+    mem = build_target(files)
+    mem = re.findall(r"\b[0-9A-Z]{2}\b", mem)
+    mem = bytes([int(n, 16) for n in mem])
+    mem = {k: v for k, v in enumerate(mem)}
+
+    rom = AvalonMaster(dut, "avs_rom", dut.clk)
+
+    await triggers.FallingEdge(dut.reset)
+    await triggers.RisingEdge(dut.clk)
+
+    for k, v in mem.items():
+        await rom.write(k, v)
+    dut.stop.value = 0
+
+    await triggers.ClockCycles(dut.clk, 180)
 
 
 @testbench(timeout_time=60,
@@ -143,5 +189,48 @@ def test_servio_mux_testcase():
     )
 
 
+def test_servio_testcase():
+    root_dir = os.path.dirname(__file__) + "/.."
+    toplevel, files = "servio", []
+    includes, defines = [], []
+    parameters = {"DATA_DEPTH": "1024"}
+
+    files += ["{}/rtl/{}".format(root_dir, n)
+              for n in ["servio.v", "servio_mux.v", "servio_ram.v"]]
+    files += ["{}/modules/serv/rtl/{}".format(root_dir, n)
+              for n in ["serv_alu.v",
+                        "serv_csr.v",
+                        "serv_decode.v",
+                        "serv_mem_if.v",
+                        "serv_rf_if.v",
+                        "serv_rf_ram.v",
+                        "serv_state.v",
+                        "serv_bufreg.v",
+                        "serv_ctrl.v",
+                        "serv_immdec.v",
+                        "serv_rf_ram_if.v",
+                        "serv_rf_top.v",
+                        "serv_top.v"]]
+    includes += ["{}/modules/serv/rtl".format(root_dir)]
+    # defines += ["SERVIO_SIM"]
+    assert not False in [os.path.isdir(n) for n in includes]
+    assert not False in [os.path.isfile(n) for n in files]
+
+    simulator.run(
+        verilog_sources=files,
+        toplevel=toplevel,
+        defines=defines,
+        includes=includes,
+        extra_env=parameters,
+        parameters=parameters,
+        force_compile=True,
+        compile_args=["-Wtimescale"],
+        sim_build="sim_build/{}".format(toplevel),
+        module="test_servio"
+    )
+
+
 if __name__ == "__main__":
     test_servio_rom_testcase()
+    test_servio_mux_testcase()
+    test_servio_testcase()
