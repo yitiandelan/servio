@@ -9,7 +9,7 @@ import re
 from random import randint
 from cocotb import test as testbench
 from cocotb import triggers, clock, fork
-from cocotb.drivers.avalon import AvalonMemory, AvalonMaster
+from cocotb_bus.drivers.avalon import AvalonMemory, AvalonMaster
 from cocotb_test import simulator
 from tempfile import TemporaryDirectory
 from test_serv import set_reset, set_regs, build_target
@@ -26,7 +26,6 @@ async def servio_base_function(dut):
     files["blink.s"] = '''
         .globl _start
         _start:
-            addi x0, x0, 0
             addi x0, x0, 0
             addi x0, x0, 0
             jal x0, _start
@@ -48,7 +47,12 @@ async def servio_base_function(dut):
     mem = bytes([int(n, 16) for n in mem])
     mem = {k: v for k, v in enumerate(mem)}
 
-    rom = AvalonMaster(dut, "avs_rom", dut.clk)
+    csr = AvalonMaster(dut, "avs_s0", dut.clk)
+    rom = AvalonMaster(dut, "avs_s1", dut.clk)
+
+    for n in range(4):
+        fork(set_regs(dut.clk, dut.sm[n].cpu.bufreg, ["o_lsb"]))
+        fork(set_regs(dut.clk, dut.sm[n].cpu.state, ["misalign_trap_sync"]))
 
     await triggers.FallingEdge(dut.reset)
     await triggers.RisingEdge(dut.clk)
@@ -57,6 +61,8 @@ async def servio_base_function(dut):
         await rom.write(k, v)
     dut.stop.value = 0
 
+    await triggers.ClockCycles(dut.clk, 480)
+    dut.stop.value = 1
     await triggers.ClockCycles(dut.clk, 180)
 
 
@@ -125,8 +131,19 @@ async def servio_mux_function(dut):
             await triggers.ClockCycles(dut.clk, 1)
         obj[2].value = 0
 
+    async def aso_put_data(dut, bus: str, cnt=1, delay=0):
+        await triggers.ClockCycles(dut.clk, delay)
+        obj = ["{}_{}".format(bus, n) for n in ["valid", "data"]]
+        obj = [getattr(dut, n) for n in obj]
+        obj[0].value = 1
+        for d in list(range(40)) * cnt:
+            obj[1].value = d
+            await triggers.ClockCycles(dut.clk, 1)
+        obj[0].value = 0
+
     mem = AvalonMemory(dut, "avm_s4", dut.clk, readlatency_min=0,
                        readlatency_max=0, memory={k: 0 for k in range(dut.DATA_DEPTH.value)})
+    fork(aso_put_data(dut, bus="asi_cyc", cnt=20, delay=2))
 
     for _ in range(2):
         for n in range(4):
@@ -223,7 +240,7 @@ def test_servio_testcase():
         includes=includes,
         extra_env=parameters,
         parameters=parameters,
-        force_compile=True,
+        # force_compile=True,
         compile_args=["-Wtimescale"],
         sim_build="sim_build/{}".format(toplevel),
         module="test_servio"
