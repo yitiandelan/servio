@@ -8,9 +8,16 @@
 module servio #(
     parameter DATA_DEPTH = 1024
 )(
-    input wire [aw-1:0] avs_rom_address,
-    input wire          avs_rom_write,
-    input wire [7:0]    avs_rom_writedata,
+    input wire [11:0]   avs_s0_address,
+    input wire          avs_s0_read,
+    output reg [31:0]   avs_s0_readdata,
+    input wire          avs_s0_write,
+    input wire [31:0]   avs_s0_writedata,
+    output reg          avs_s0_waitrequest,
+
+    input wire [aw-1:0] avs_s1_address,
+    input wire          avs_s1_write,
+    input wire [7:0]    avs_s1_writedata,
 
     input wire          clk,
     input wire          reset
@@ -20,19 +27,33 @@ module servio #(
     localparam RESET_STRATEGY = "MINI";
 
     reg         stop = 1;
-    reg         sclr;
-
-    wire [31:0] wb_sm_adr [0:4-1];
+    reg  [ 5:0] tcnt;
+    reg         tcen;
+    wire [ 9:0] wb_sm_adr [0:4-1];
     wire        wb_sm_cyc [0:4-1];
     wire [31:0] wb_sm_rdt [0:4-1];
     wire        wb_sm_ack [0:4-1];
-
     wire [aw-1:0] avm_ibus_ra;
-    wire [7:0]    avm_ibus_rd;
-    wire          avm_ibus_rr, avm_ibus_rv;
+    wire [ 7:0] avm_ibus_rd;
+    wire        avm_ibus_rr, avm_ibus_rv;
 
     always @(posedge clk) begin
-        sclr <= (reset | stop);
+        if (reset) begin
+            tcnt <= 0;
+            tcen <= 0;
+        end
+        else if (tcen) begin
+            if (tcnt == (40-1)) begin
+                tcnt <= (0);
+                tcen <= (!stop);
+            end
+            else begin
+                tcnt <= (tcnt + 1);
+            end
+        end
+        else begin
+            tcen <= (!stop);
+        end
     end
 
     generate
@@ -41,23 +62,23 @@ module servio #(
 
     wire 	    rf_wreq;
     wire 	    rf_rreq;
-    wire [4:0]  wreg0;
-    wire [4:0]  wreg1;
+    wire [ 4:0] wreg0;
+    wire [ 4:0] wreg1;
     wire 	    wen0;
     wire 	    wen1;
     wire 	    wdata0;
     wire 	    wdata1;
-    wire [4:0]  rreg0;
-    wire [4:0]  rreg1;
+    wire [ 4:0] rreg0;
+    wire [ 4:0] rreg1;
     wire 	    rf_ready;
     wire 	    rdata0;
     wire 	    rdata1;
 
-    wire [8:0]  waddr;
-    wire [1:0]  wdata;
+    wire [ 8:0] waddr;
+    wire [ 1:0] wdata;
     wire 	    wen;
-    wire [8:0]  raddr;
-    wire [1:0]  rdata;
+    wire [ 8:0] raddr;
+    wire [ 1:0] rdata;
 
     serv_top #(
         .RESET_PC       (0),
@@ -95,8 +116,6 @@ module servio #(
         .i_dbus_rdt     (32'd0),
         .i_dbus_ack     (1'b0)
     );
-
-    assign wb_sm_adr[i][31:10] = 0;
 
     serv_rf_ram #(
         .width          (2),
@@ -168,8 +187,14 @@ module servio #(
         .avm_s4_readdata        (avm_ibus_rd),
         .avm_s4_readdatavalid   (avm_ibus_rv),
 
+        .asi_cyc_data           (tcnt),
+        .asi_cyc_valid          (tcen),
+
+        .aso_cyc_data           (),
+        .aso_cyc_valid          (),
+
         .clk                    (clk),
-        .reset                  (sclr)
+        .reset                  (reset)
     );
 
     servio_rom #(
@@ -181,9 +206,9 @@ module servio #(
         .avs_s0_readdata        (avm_ibus_rd),
         .avs_s0_readdatavalid   (avm_ibus_rv),
 
-        .avs_s1_address         (avs_rom_address),
-        .avs_s1_write           (avs_rom_write),
-        .avs_s1_writedata       (avs_rom_writedata),
+        .avs_s1_address         (avs_s1_address),
+        .avs_s1_write           (avs_s1_write),
+        .avs_s1_writedata       (avs_s1_writedata),
 
         .clk                    (clk),
         .reset                  (reset)
